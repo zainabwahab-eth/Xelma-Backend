@@ -1,4 +1,4 @@
-import { createClient } from "redis";
+import { createClient, type RedisClientType } from "redis";
 import { withTimeout } from "../utils/timeout-wrapper";
 import logger from "../utils/logger";
 
@@ -33,10 +33,8 @@ const metrics: CacheMetrics = {
 
 const redisCacheDebug = process.env.REDIS_CACHE_DEBUG === "true";
 
-type RedisClient = any;
-
-let client: RedisClient | null = null;
-let clientConnecting: Promise<RedisClient | null> | null = null;
+let client: RedisClientType | null = null;
+let clientConnecting: Promise<RedisClientType | null> | null = null;
 let lastRedisFailureAtMs = 0;
 
 function getRedisUrl(): string | null {
@@ -55,7 +53,7 @@ function getRedisCachePrefix(): string {
   return process.env.REDIS_CACHE_PREFIX?.trim() || "xelma:cache";
 }
 
-async function ensureClient(): Promise<RedisClient | null> {
+async function ensureClient(): Promise<RedisClientType | null> {
   const shouldEnable = getRedisCacheEnabled();
   const redisUrl = getRedisUrl();
 
@@ -425,7 +423,7 @@ export async function invalidateLeaderboardSortedSet(): Promise<void> {
   }
 }
 
-export function getRedisClient(): RedisClient | null {
+export function getRedisClient(): RedisClientType | null {
   return client;
 }
 
