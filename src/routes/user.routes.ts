@@ -17,6 +17,7 @@ import {
 import config from "../config";
 import { getMockBetHistory } from "../data/mockData";
 import { sendSuccess, sendError } from "../utils/response";
+import { computeXp, computeRankTitle } from "../utils/user-rank.util";
 
 const router = Router();
 
@@ -135,27 +136,6 @@ router.get("/stats", authenticateUser, (async (req: AuthenticatedRequest, res: R
     next(error);
   }
 }) as any);
-
-/**
- * Computes an XP score from on-chain user stats.
- * XP = totalWins × 100 + bestStreak × 50
- */
-function computeXp(totalWins: number, bestStreak: number): number {
-  return totalWins * 100 + bestStreak * 50;
-}
-
-/**
- * Derives a rank title from XP.
- * Thresholds match hackathon profile expectations.
- */
-function computeRankTitle(xp: number): string {
-  if (xp >= 10000) return "Diamond";
-  if (xp >= 5000) return "Platinum";
-  if (xp >= 3000) return "Gold";
-  if (xp >= 1500) return "Silver";
-  if (xp >= 500) return "Bronze";
-  return "Rookie";
-}
 
 /**
  * GET /api/user/:address/stats
@@ -383,6 +363,7 @@ router.get(
         const predictions = await prisma.prediction.findMany({
           where: {
             userId: user.id,
+            chainStatus: { in: ['CONFIRMED', 'NOT_REQUIRED'] },
             createdAt: { lt: cursorDate },
           },
           orderBy: { createdAt: "desc" },
@@ -404,13 +385,21 @@ router.get(
       // ── Offset-based path (backward-compatible) ───────────────────────────
       const [predictions, total] = await prisma.$transaction([
         prisma.prediction.findMany({
-          where: { userId: user.id },
+          where: {
+            userId: user.id,
+            chainStatus: { in: ['CONFIRMED', 'NOT_REQUIRED'] },
+          },
           orderBy: { createdAt: "desc" },
           take: limit,
           skip: offset,
           include: { round: roundSelect },
         }),
-        prisma.prediction.count({ where: { userId: user.id } }),
+        prisma.prediction.count({
+          where: {
+            userId: user.id,
+            chainStatus: { in: ['CONFIRMED', 'NOT_REQUIRED'] },
+          },
+        }),
       ]);
 
       return sendSuccess(res, predictions.map(mapPrediction), {
@@ -429,6 +418,17 @@ router.get(
 
 /** Maps a raw Prisma prediction + round to the public API shape. */
 function mapPrediction(p: any) {
+  let result: string;
+  if (p.chainStatus === 'FAILED') {
+    result = 'FAILED';
+  } else if (p.won === null) {
+    result = 'PENDING';
+  } else if (p.won) {
+    result = 'WIN';
+  } else {
+    result = 'LOSS';
+  }
+
   return serializePrediction({
     roundId: p.roundId,
     asset: "XLM",
@@ -436,7 +436,7 @@ function mapPrediction(p: any) {
     amount: p.amount,
     side: p.side,
     predictedPrice: p.priceRange,
-    result: p.won === null ? "PENDING" : p.won ? "WIN" : "LOSS",
+    result,
     payout: p.payout,
     timestamp: p.createdAt,
     roundStatus: p.round.status,

@@ -1,4 +1,4 @@
-﻿import type { Express, Application } from "express";
+import type { Express, Application } from "express";
 
 export type AppEntrypoint = "main" | "hackathon";
 
@@ -18,15 +18,11 @@ export interface ParityAllowlistEntry {
    * Every accepted difference must trace back to a flag — if it does not,
    * it is drift rather than a decision.
    */
-  flag: string;
+  flag?: string;
 }
 
 export const VERSIONED_ALIAS_ALLOWLIST: string[] = [
-  // Single-asset XLM oracle — intentionally no /api/v1/price mirror yet.
-  "GET /price",
-  // Multi-asset ticker is mounted after the v1 router today; keep unversioned
-  // until /api/v1/prices is wired. Distinct from GET /price (different payload).
-  "GET /prices",
+  // Price endpoints (/api/v1/prices and /api/v1/price) are now fully wired into the v1 mirror
 ];
 
 /**
@@ -58,8 +54,8 @@ export const PARITY_ALLOWLIST: ParityAllowlistEntry[] = [
   { method: "GET", path: "/api/predictions/round/:roundId", only: "main", reason: "Per-round predictions require a database.", flag: "predictions" },
 
   // --- education ---
-  { method: "GET", path: "/api/education/guides", only: "main", reason: "Education content is production-only.", flag: "education" },
-  { method: "GET", path: "/api/education/tip", only: "main", reason: "Education content is production-only.", flag: "education" },
+  { method: "GET", path: "/api/education/guides", only: "main", reason: "Education content is production-only by default; hackathon can opt in via ENABLE_EDUCATION.", flag: "education (config: enableEducation)" },
+  { method: "GET", path: "/api/education/tip", only: "main", reason: "Education content is production-only by default; hackathon can opt in via ENABLE_EDUCATION.", flag: "education (config: enableEducation)" },
 
   // --- errorCatalog ---
   { method: "GET", path: "/api/errors", only: "main", reason: "Production error catalog is not part of the mock demo.", flag: "errorCatalog" },

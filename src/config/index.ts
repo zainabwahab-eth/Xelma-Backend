@@ -9,6 +9,8 @@ dotenv.config();
 // Type definitions
 // ---------------------------------------------------------------------------
 
+export type SafetyProfile = "production" | "demo";
+
 export interface AppConfig {
   port: number;
   nodeEnv: "development" | "production" | "test";
@@ -20,6 +22,22 @@ export interface AppConfig {
   dataStore: "memory" | "postgres";
   enableSimulation: boolean;
   enableMultiplayerSocial: boolean;
+  /**
+   * ENABLE_EDUCATION — hackathon opt-in for `/api/education/*`.
+   * `resolveFeatures` in `src/app-factory.ts` reads the raw env var as a
+   * tri-state so "unset" keeps the per-mode default: hackathon off,
+   * full app on. An explicit `false` also disables it in the full app.
+   */
+  enableEducation: boolean;
+  metricsScrapeToken: string;
+  /** Lightweight Socket.IO without Prisma chat/session (hackathon demos). */
+  socketDemoMode: boolean;
+  /**
+   * Safety profile controlling money-path guardrails.
+   * "production" — fail-closed: BET_STUB_MODE forbidden, Soroban secrets required.
+   * "demo"       — fail-open: stub mode allowed, secrets optional.
+   */
+  safetyProfile: SafetyProfile;
 }
 
 export interface JwtConfig {
@@ -99,6 +117,13 @@ function buildConfig(): Config {
   const v = createValidator();
   const env = process.env;
 
+  const safetyProfile: SafetyProfile = v.oneOf(
+    env.SAFETY_PROFILE,
+    "SAFETY_PROFILE",
+    ["production", "demo"] as const,
+    "demo",
+  );
+
   const app: AppConfig = {
     port: v.port(env.PORT, "PORT", 3000),
     nodeEnv: v.oneOf(
@@ -125,6 +150,16 @@ function buildConfig(): Config {
     ),
     enableSimulation: v.boolean(env.ENABLE_SIMULATION, false),
     enableMultiplayerSocial: v.boolean(env.ENABLE_MULTIPLAYER_SOCIAL, true),
+    enableEducation: v.boolean(env.ENABLE_EDUCATION, false),
+    metricsScrapeToken: v.optional(env.METRICS_SCRAPE_TOKEN, ""),
+    socketDemoMode: v.boolean(
+      env.SOCKET_DEMO_MODE ??
+        (env.DATA_STORE === "memory" || env.DATA_MODE === "mock"
+          ? "true"
+          : undefined),
+      false,
+    ),
+    safetyProfile,
   };
 
   const jwt: JwtConfig = {
