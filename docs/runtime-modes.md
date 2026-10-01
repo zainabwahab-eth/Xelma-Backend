@@ -28,6 +28,7 @@ behavior, or choosing the right flags for a deployment profile.
 | `ROUNDS_MOCK_MODE` | `config.app.roundsMockMode` | `true`, `false` | `false` | `src/config/index.ts` |
 | `API_ONLY` | `process.env.API_ONLY` | `true`, `false` | `false` | `src/index.ts` |
 | `SOROBAN_FAIL_CLOSED` | `config.soroban.failClosed` | `true`, `false` | `false` | `src/config/index.ts` |
+| `ENABLE_EDUCATION` | `config.app.enableEducation` | `true`, `false` | `false` | `src/config/index.ts` |
 
 ### DATA_STORE auto-derivation
 
@@ -73,6 +74,39 @@ Soroban or just record the intent **locally**.
 > The active mode is logged at startup:
 > `Bet mode: STUB (no on-chain calls)` or `Bet mode: ON-CHAIN (Soroban)`.
 
+### MAX_STAKE
+
+Circuit breaker on bet / prediction size, enforced in the Zod schemas
+(`src/utils/max-stake.util.ts`) so it applies identically to stub and on-chain
+paths.
+
+| Setting | Value |
+|---|---|
+| Env var | `MAX_STAKE` (alias: `MAX_PREDICTION_AMOUNT`) |
+| Unit | **XLM** (same unit as every `amount` field; never stroops) |
+| Default | `1000000` (also used if the value is unset or not a positive number) |
+| Over-max result | `400` with a field error on `amount` |
+
+**Affected endpoints:** `POST /api/bets/*`, `POST /api/rounds/:id/bet*`,
+`POST /api/predictions/submit` and batch, and legends predictions.
+
+### Data retention (expired challenges and idempotency keys)
+
+`SchedulerService` runs `retentionService.runAllPolicies()` daily at 03:00 under
+the `run-retention-policies` distributed lock. In memory mode the
+`MemoryHousekeepingService` sweep runs the same auth-challenge and idempotency
+cleanups.
+
+| Data | Expiry / TTL | Deleted when |
+|---|---|---|
+| `AuthChallenge` | `expiresAt` (challenge lifetime) and `RETENTION_AUTH_CHALLENGES_TTL_DAYS` (default `7`) | `expiresAt` passed **or** older than the TTL |
+| `IdempotencyKey` | Per-key `expiresAt`: 10 min default for `checkIdempotency`/`storeIdempotencyResult`, 24 h default for locks | `expiresAt` passed |
+| Chat messages / audit logs | `RETENTION_CHAT_MESSAGES_TTL_DAYS` / `RETENTION_AUDIT_LOGS_TTL_DAYS` (default `90`) | older than the TTL |
+
+Expired idempotency keys are also ignored on read, so a stale key cannot replay
+a response even before the job runs. Tests: `src/tests/retention-expiry.spec.ts`,
+`src/tests/idempotency.spec.ts`.
+
 ### SOROBAN_FAIL_CLOSED
 
 Controls whether **money paths** (bet placement and round resolve) abort when
@@ -94,6 +128,25 @@ in `round.service`, `round.routes`, and `resolution.service`. Policy helper:
 > The active mode is logged at startup:
 > `Soroban money-path policy: FAIL-CLOSED ...` or `FAIL-OPEN ...`.
 
+### ENABLE_EDUCATION
+
+Controls whether the **education** endpoints (`/api/education/guides`, `/api/education/tip`)
+are mounted. This flag is an **opt-in for hackathon mode** (whose education surface is
+off by default) and a **kill switch for the full app** (which serves education by
+default). Full-app behavior is unchanged when the variable is unset.
+
+| `ENABLE_EDUCATION` | Hackathon app | Full app |
+|---|---|---|
+| unset / `false` (default) | Education routes **not** mounted | Education routes mounted (normal full-app behavior) |
+| `true` | Education routes mounted (opt-in for demos) | Education routes mounted (unchanged) |
+
+> To turn education **off** in the full app, set `ENABLE_EDUCATION=false` explicitly.
+
+**Affected endpoints:** `GET /api/education/guides`, `GET /api/education/tip`
+
+**Implementation:** `src/config/index.ts` (`enableEducation`), `src/app-factory.ts` (`resolveFeatures`),
+`src/security/route-parity.registry.ts` (parity allowlist).
+
 ### ROUNDS_MOCK_MODE
 
 Controls whether the **round listing** endpoint skips Soroban and the database
@@ -114,6 +167,18 @@ routers is mounted is decided by the app mode — see
 ---
 
 ## Recommended combinations
+
+## Operator diagnostics
+
+The full application exposes `GET /api/admin/runtime-flags` to administrators.
+It returns only a whitelist of non-secret mode and scheduler flags, including
+`dataMode`, `dataStore`, `roundsMockMode`, and the scheduler state. It never
+returns `DATABASE_URL`, JWT secrets, Soroban secrets, or other credentials.
+The endpoint is not mounted by the hackathon app.
+
+Public price and stats responses use a 30-second browser/CDN cache aligned with
+the price service TTL. Health responses are always `no-store`; Redis and
+database caching are separate concerns from HTTP caching.
 
 ### 1. Full local development (no external deps)
 
@@ -229,6 +294,7 @@ for your current workflow.
 | `BET_STUB_MODE` | `src/services/bet.service.ts` |
 | `ROUNDS_MOCK_MODE` | `src/config/index.ts`, `src/services/round.service.ts` |
 | `SOROBAN_FAIL_CLOSED` | `src/config/index.ts`, `src/services/soroban.service.ts` |
+| `ENABLE_EDUCATION` | `src/config/index.ts`, `src/app-factory.ts`, `src/security/route-parity.registry.ts` |
 | Mock data | `src/data/mockData.ts` |
 
 ---
@@ -257,4 +323,3 @@ The multi-stage `Dockerfile` packages both full production (with live Soroban co
 | **Full Production (Live)** | `DATA_MODE=live`, `BET_STUB_MODE=false`, `API_MODE=full` | Verifies Soroban bindings, applies Prisma migrations, and boots full app `dist/index.js`. |
 | **Demo / Hackathon** | `DATA_MODE=mock`, `API_MODE=hackathon`, `RUN_MIGRATIONS=false` | Boots lightweight mock demo server `dist/server.js` without requiring external database or Soroban keys. |
 | **API Only** | `API_ONLY=true`, `BET_STUB_MODE=true` | Boots standard API server without running background schedulers or oracle loops. |
-

@@ -39,6 +39,7 @@ import errorsRoutes from './routes/errors.routes';
 import corsDiagnosticsRoutes from './routes/admin-cors-diagnostics.routes';
 import deadLetterRoutes from './routes/admin-dead-letter.routes';
 import betAuditRoutes from './routes/admin-bet-audit.routes';
+import runtimeFlagsRoutes from './routes/admin-runtime-flags.routes';
 import healthRoutes from './routes/health';
 import statsRoutes from './routes/stats';
 import indexRoutes from './routes/index';
@@ -67,6 +68,7 @@ import { swaggerSpec } from './docs/openapi';
 import { hackathonSwaggerSpec } from './docs/hackathon-openapi';
 import config from './config';
 import logger from './utils/logger';
+import { noStoreHeaders } from './utils/http-cache';
 
 export type AppMode = 'full' | 'hackathon';
 
@@ -168,6 +170,21 @@ const HACKATHON_FEATURES: AppFeatures = {
   apiDocs: true,
 };
 
+/**
+ * ENABLE_EDUCATION is a tri-state at the routing layer: unset keeps the
+ * per-mode default (hackathon off, full app on), while any explicit value
+ * applies to both modes — `true` opts the hackathon app into education and
+ * `false` is a kill switch for the full app. Mirrors the boolean parsing in
+ * `src/config/validation.ts` (unknown values fall back to `false`).
+ */
+function parseEducationFlag(raw: string | undefined): 'true' | 'false' | null {
+  if (raw === undefined) return null;
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+  if (value === 'true' || value === '1') return 'true';
+  return 'false';
+}
+
 export function resolveFeatures(
   mode: AppMode,
   overrides: Partial<AppFeatures> = {},
@@ -180,6 +197,16 @@ export function resolveFeatures(
   if (overrides.multiplayerSocial === undefined) {
     resolved.multiplayerSocial =
       resolved.multiplayerSocial && config.app.enableMultiplayerSocial;
+  }
+
+  // ENABLE_EDUCATION: explicit values apply to both modes (hackathon opt-in
+  // / full-app kill switch); unset keeps the per-mode defaults. An explicit
+  // override still wins so tests can force the surface on or off.
+  if (overrides.education === undefined) {
+    const educationFlag = parseEducationFlag(process.env.ENABLE_EDUCATION);
+    if (educationFlag !== null) {
+      resolved.education = educationFlag === 'true';
+    }
   }
 
   return resolved;
@@ -236,15 +263,15 @@ function mountApiRoutes(
   features: AppFeatures,
 ): void {
   if (features.auth) {
-    target.use('/auth', authRoutes);
+    target.use('/auth', noStoreHeaders, authRoutes);
   }
 
   target.use('/user', userRoutes);
   target.use('/rounds', roundsRoutes);
-  target.use('/bets', betsRoutes);
+  target.use('/bets', noStoreHeaders, betsRoutes);
 
   if (features.predictions) {
-    target.use('/predictions', predictionsRoutes);
+    target.use('/predictions', noStoreHeaders, predictionsRoutes);
   }
   if (features.education) {
     target.use('/education', educationRoutes);
@@ -271,6 +298,7 @@ function mountApiRoutes(
     target.use('/admin/cors-diagnostics', corsDiagnosticsRoutes);
     target.use('/admin/dead-letter', deadLetterRoutes);
     target.use('/admin/bet-audit', betAuditRoutes);
+    target.use('/admin/runtime-flags', runtimeFlagsRoutes);
   } else if (features.corsDiagnostics) {
     // In hackathon mode, mount CORS diagnostics independently when
     // ENABLE_CORS_DIAGNOSTICS is set. Auth/admin checks are still enforced
@@ -373,16 +401,13 @@ export function createApp(options: CreateAppOptions = {}): Application {
   }
 
   if (includeErrorHandlers) {
+    // Both apps share a single 404 handler so unmatched routes return an
+    // identical response shape regardless of entrypoint (#637). Each mode
+    // still keeps its own error handler for errors forwarded via next(err).
+    app.use(notFoundHandler);
     if (mode === 'full') {
-      // Forward unmatched routes into the error handler so 404s use the same
-      // response envelope as every other error.
-      app.use((req: Request, _res: Response, next: NextFunction) => {
-        const { NotFoundError } = require('./utils/errors');
-        next(new NotFoundError(`Route ${req.method} ${req.path} not found`));
-      });
       app.use(fullErrorHandler);
     } else {
-      app.use(notFoundHandler);
       app.use(hackathonErrorHandler);
     }
   }
